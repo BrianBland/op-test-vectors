@@ -4666,6 +4666,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "opfp"
+version = "0.2.0"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-primitives",
+ "alloy-provider",
+ "clap",
+ "color-eyre",
+ "futures",
+ "hashbrown",
+ "kona-derive",
+ "op-test-vectors",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "superchain-registry",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "opt8n"
 version = "0.2.0"
 dependencies = [
