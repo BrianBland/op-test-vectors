@@ -4,14 +4,9 @@ use clap::Parser;
 use color_eyre::eyre::{eyre, Result};
 use tracing::Level;
 
-// pub mod blobs;
-// pub mod fixtures;
-// pub mod from_l1;
-// pub mod from_l2;
-// pub mod info;
-// pub mod util;
-// pub use fixtures::build_fixture_blocks;
 pub mod from_op_program;
+pub mod run_op_program;
+pub mod util;
 
 /// Main CLI
 #[derive(Parser, Clone, Debug)]
@@ -27,6 +22,8 @@ pub struct Cli {
 pub enum Commands {
     /// Creates the fault proof fixture from the op-program implementation.
     FromOpProgram(from_op_program::FromOpProgram),
+    /// Runs the op-program implementation with a given fixture.
+    RunOpProgram(run_op_program::RunOpProgram),
 }
 
 impl Cli {
@@ -34,6 +31,7 @@ impl Cli {
     pub fn v(&self) -> u8 {
         match &self.command {
             Commands::FromOpProgram(cmd) => cmd.v,
+            Commands::RunOpProgram(cmd) => cmd.v,
         }
     }
 
@@ -57,6 +55,7 @@ impl Cli {
     pub async fn run(self) -> Result<()> {
         match self.command {
             Commands::FromOpProgram(cmd) => cmd.run().await,
+            Commands::RunOpProgram(cmd) => cmd.run().await,
         }
     }
 }
