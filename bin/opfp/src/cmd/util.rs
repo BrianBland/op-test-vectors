@@ -1,8 +1,7 @@
 use alloy_eips::eip1559::BaseFeeParams;
-use alloy_primitives::{Address, B256, U256};
+use alloy_primitives::{Address, B256};
 use alloy_provider::{Provider, ReqwestProvider};
 use color_eyre::Result;
-use hashbrown::HashMap;
 use serde::{Deserialize, Serialize};
 use superchain_registry::BlockID;
 
@@ -94,89 +93,61 @@ impl RollupProvider {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TxPoolContent {
-    pub pending: HashMap<Address, HashMap<u64, RPCTransaction>>,
-    pub queued: HashMap<Address, HashMap<u64, RPCTransaction>>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct RPCTransaction {
-    from: Address,
-    to: Address,
-    gas: U256,
-    gas_price: U256,
-    hash: B256,
-    input: Vec<u8>,
-    nonce: U256,
-    value: U256,
-}
-
-pub struct TxPoolProvider {
-    inner: ReqwestProvider,
-}
-
-impl TxPoolProvider {
-    pub fn new(inner: ReqwestProvider) -> Self {
-        Self { inner }
-    }
-
-    pub async fn txpool_content(&self) -> Result<TxPoolContent> {
-        let raw_resp = self.inner.raw_request("txpool_content".into(), ()).await?;
-        let resp: TxPoolContent = serde_json::from_value(raw_resp)?;
-        Ok(resp)
-    }
-
-    pub fn new_http(url: reqwest::Url) -> Self {
-        let inner = ReqwestProvider::new_http(url);
-        Self::new(inner)
-    }
-}
-
+/// RollupConfig type compatible with the Optimism rollup node.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RollupConfig {
+    /// The genesis information.
     pub genesis: Genesis,
+    /// The block time.
     pub block_time: u64,
+    /// The maximum sequencer drift.
     pub max_sequencer_drift: u64,
+    /// The sequence window size.
     pub seq_window_size: u64,
 
+    /// The channel timeout beginning with bedrock.
     #[serde(rename = "channel_timeout")]
     pub channel_timeout_bedrock: u64,
-    // #[serde(default)]
-    // pub channel_timeout_granite: u64,
+    // The L1 chain ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub l1_chain_id: Option<u128>,
+    // The L2 chain ID.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub l2_chain_id: Option<u128>,
 
+    /// The regolith activation time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub regolith_time: Option<u64>,
+    /// The canyon activation time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canyon_time: Option<u64>,
+    /// The delta activation time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delta_time: Option<u64>,
+    /// The ecotone activation time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ecotone_time: Option<u64>,
+    /// The fjord activation time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fjord_time: Option<u64>,
+    /// The granite activation time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub granite_time: Option<u64>,
+    /// The interop activation time.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interop_time: Option<u64>,
+    /// The batch inbox address.
     pub batch_inbox_address: Address,
+    /// The deposit contract address.
     pub deposit_contract_address: Address,
+    /// The L1 system config address.
     pub l1_system_config_address: Address,
+    /// The protocol versions address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub protocol_versions_address: Option<Address>,
+    /// The DA challenge address.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub da_challenge_address: Option<Address>,
-    // #[serde(default)]
-    // pub da_challenge_window: u64,
-    // #[serde(default)]
-    // pub da_resolve_window: u64,
-    // #[serde(default)]
-    // pub use_plasma: bool,
 }
 
 impl From<&kona_primitives::RollupConfig> for RollupConfig {

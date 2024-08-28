@@ -1,5 +1,6 @@
 //! From Op Program Subcommand
 
+use alloy_primitives::hex::FromHex;
 use alloy_primitives::BlockHash;
 use alloy_primitives::{hex::ToHexExt, B256};
 use clap::{ArgAction, Parser};
@@ -170,7 +171,9 @@ impl FromOpProgram {
                 .next()
                 .unwrap();
 
-            witness_data.insert(key.parse::<B256>().unwrap(), contents.into());
+            let witness = FromHex::from_hex(contents).unwrap();
+
+            witness_data.insert(key.parse::<B256>().unwrap(), witness);
         });
 
         let fixture = FaultProofFixture {
