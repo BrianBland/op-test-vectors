@@ -1,11 +1,12 @@
 //! From Op Program Subcommand
 
+use alloy_primitives::BlockHash;
 use alloy_primitives::{hex::ToHexExt, B256};
 use clap::{ArgAction, Parser};
 use color_eyre::{eyre::eyre, Result};
 use hashbrown::HashMap;
-use kona_derive::{online::*, types::L2BlockInfo};
-use op_test_vectors::faultproof::{FaultProofFixture, FaultProofInputs};
+use kona_derive::online::*;
+use op_test_vectors::faultproof::{self, ChainDefinition, FaultProofFixture, FaultProofInputs};
 use reqwest::Url;
 use std::sync::Arc;
 use std::{
@@ -15,6 +16,8 @@ use std::{
 };
 use superchain_registry::ROLLUP_CONFIGS;
 use tracing::{debug, error, info, trace};
+
+use crate::cmd::util::RollupConfig;
 
 use super::util::{RollupProvider, SafeHeadResponse};
 
@@ -27,9 +30,15 @@ pub struct FromOpProgram {
     /// The path to the op-program binary.
     #[clap(short, long, help = "Path to the op-program binary")]
     pub op_program: PathBuf,
-    /// The L2 block number to start from.
-    #[clap(short, long, help = "Starting L2 block number")]
+    /// The L2 block number to validate.
+    #[clap(long, help = "L2 block number to validate")]
     pub l2_block: u64,
+    /// Optional L1 block number which can derive the given L2 block.
+    #[clap(
+        long,
+        help = "Optional L1 block number which can derive the given L2 block"
+    )]
+    pub l1_block: Option<u64>,
     /// An RPC URL to fetch L1 block data from.
     #[clap(long, help = "RPC url to fetch L1 block data from")]
     pub l1_rpc_url: String,
@@ -42,6 +51,15 @@ pub struct FromOpProgram {
     /// A rollup client to fetch derivation data from.
     #[clap(long, help = "Rollup client url to fetch derivation data from")]
     pub rollup_url: String,
+    /// Optional chain name.
+    #[clap(long, help = "Optional chain name")]
+    pub chain_name: Option<String>,
+    /// Optional path to the rollup config file.
+    #[clap(long, help = "Optional path to the rollup config file")]
+    pub rollup_path: Option<PathBuf>,
+    /// Optional path to the genesis file.
+    #[clap(long, help = "Optional path to the genesis file")]
+    pub genesis_path: Option<PathBuf>,
     /// The output file for the test fixture.
     #[clap(long, help = "Output file for the test fixture")]
     pub output: PathBuf,
@@ -55,11 +73,8 @@ impl FromOpProgram {
     pub async fn run(&self) -> Result<()> {
         trace!(target: TARGET, "Producing fault proof fixture for L2 block {}", self.l2_block);
 
-        // Build the pipeline
-        let cfg = self.rollup_config().await?;
-
         let inputs = self.fault_proof_inputs().await?;
-        info!(target: TARGET, "Using the following fault proof inputs: {:?}", inputs);
+        debug!(target: TARGET, "Using the following fault proof inputs: {:?}", inputs);
 
         let temp_input_dir = env::temp_dir().join("op-program-input");
         if temp_input_dir.exists() {
@@ -68,27 +83,42 @@ impl FromOpProgram {
         } else {
             std::fs::create_dir(&temp_input_dir)?;
         }
-
-        // Write the genesis file to the temp directory.
-        let genesis_file = temp_input_dir.join("genesis.json");
-        let file = std::fs::File::create(&genesis_file)?;
-        serde_json::to_writer_pretty(file, &cfg.genesis)?;
-
-        // Write the rollup config to the temp directory.
-        let rollup_config_file = temp_input_dir.join("rollup_config.json");
-        let file = std::fs::File::create(&rollup_config_file)?;
-        serde_json::to_writer_pretty(file, &cfg)?;
+        info!(target: TARGET, "Created input temp directory: {:?}", temp_input_dir);
 
         // create a random temp directory to store the output of the op-program binary.
         let temp_dir = env::temp_dir().join("op-program-output");
         if temp_dir.exists() {
             std::fs::remove_dir_all(&temp_dir).unwrap();
         }
+        info!(target: TARGET, "Created output temp directory: {:?}", temp_dir);
 
+        let mut command = std::process::Command::new(&self.op_program);
+        match &inputs.chain_definition {
+            ChainDefinition::Named(name) => {
+                command.arg("--network").arg(name);
+            }
+            ChainDefinition::Unnamed(rollup_config, genesis) => {
+                // Copy the genesis file to the temp directory.
+                let genesis_file = temp_input_dir.join("genesis.json");
+                let file = std::fs::File::create(&genesis_file)?;
+                serde_json::to_writer_pretty(file, &genesis)?;
+
+                // Write the rollup config to the temp directory.
+                let rollup_config_file = temp_input_dir.join("rollup_config.json");
+                let file = std::fs::File::create(&rollup_config_file)?;
+                let mut cfg: RollupConfig = rollup_config.into();
+                cfg.channel_timeout_bedrock = 8;
+                serde_json::to_writer_pretty(file, &cfg)?;
+
+                command
+                    .arg("--l2.genesis")
+                    .arg(genesis_file.to_str().unwrap())
+                    .arg("--rollup.config")
+                    .arg(rollup_config_file.to_str().unwrap());
+            }
+        }
         // Execute the op-program binary.
-        let status = std::process::Command::new(&self.op_program)
-            .arg("--network")
-            .arg("base-sepolia")
+        let status = command
             .arg("--l1")
             .arg(self.l1_rpc_url.clone())
             .arg("--l2")
@@ -158,35 +188,16 @@ impl FromOpProgram {
         Ok(())
     }
 
-    /// Gets the L2 starting block number.
-    /// Returns the genesis L2 block number if the start block is less than the genesis block number.
-    pub fn start_block(&self, cfg: &RollupConfig) -> u64 {
-        if self.l2_block < cfg.genesis.l2.number {
-            cfg.genesis.l2.number
-        } else {
-            self.l2_block
-        }
-    }
-
-    /// Returns an [L2BlockInfo] cursor for the pipeline.
-    pub async fn cursor(&self) -> Result<L2BlockInfo> {
-        let cfg = self.rollup_config().await?;
-        let start_block = self.start_block(&cfg);
-        let mut l2_provider = self.l2_provider(Arc::new(cfg))?;
-        let cursor = l2_provider
-            .l2_block_info_by_number(start_block)
-            .await
-            .map_err(|_| eyre!("Failed to fetch genesis L2 block info for pipeline cursor"))?;
-        Ok(cursor)
-    }
-
     /// Returns a new [AlloyChainProvider] using the l1 rpc url.
     pub fn l1_provider(&self) -> Result<AlloyChainProvider> {
         Ok(AlloyChainProvider::new_http(self.l1_rpc_url()?))
     }
 
     /// Returns a new [AlloyL2ChainProvider] using the l2 rpc url.
-    pub fn l2_provider(&self, cfg: Arc<RollupConfig>) -> Result<AlloyL2ChainProvider> {
+    pub fn l2_provider(
+        &self,
+        cfg: Arc<kona_primitives::RollupConfig>,
+    ) -> Result<AlloyL2ChainProvider> {
         Ok(AlloyL2ChainProvider::new_http(self.l2_rpc_url()?, cfg))
     }
 
@@ -195,57 +206,22 @@ impl FromOpProgram {
         Ok(RollupProvider::new_http(self.rollup_url()?))
     }
 
-    /// Returns a new [StatefulAttributesBuilder] using the l1 and l2 providers.
-    pub fn attributes(
-        &self,
-        cfg: Arc<RollupConfig>,
-        l2_provider: &AlloyL2ChainProvider,
-        l1_provider: &AlloyChainProvider,
-    ) -> StatefulAttributesBuilder<AlloyChainProvider, AlloyL2ChainProvider> {
-        StatefulAttributesBuilder::new(cfg, l2_provider.clone(), l1_provider.clone())
-    }
-
-    /// Returns a new [OnlineBlobProviderWithFallback] using the beacon url.
-    pub fn blob_provider(
-        &self,
-    ) -> OnlineBlobProviderWithFallback<OnlineBeaconClient, OnlineBeaconClient, SimpleSlotDerivation>
-    {
-        OnlineBlobProviderBuilder::new()
-            .with_beacon_client(OnlineBeaconClient::new_http(self.beacon_url.clone()))
-            .build()
-    }
-
-    /// Returns a new [EthereumDataSource] using the l1 provider and blob provider.
-    pub fn dap(
-        &self,
-        l1_provider: AlloyChainProvider,
-        blob_provider: OnlineBlobProviderWithFallback<
-            OnlineBeaconClient,
-            OnlineBeaconClient,
-            SimpleSlotDerivation,
-        >,
-        cfg: &RollupConfig,
-    ) -> EthereumDataSource<
-        AlloyChainProvider,
-        OnlineBlobProviderWithFallback<
-            OnlineBeaconClient,
-            OnlineBeaconClient,
-            SimpleSlotDerivation,
-        >,
-    > {
-        EthereumDataSource::new(l1_provider, blob_provider, cfg)
-    }
-
     /// Gets the rollup config from the l2 rpc url.
-    pub async fn rollup_config(&self) -> Result<RollupConfig> {
+    pub async fn rollup_config(&self) -> Result<super::util::RollupConfig> {
+        if let Some(path) = &self.rollup_path {
+            let file = std::fs::File::open(&path)?;
+            let cfg: super::util::RollupConfig = serde_json::from_reader(file)?;
+            return Ok(cfg);
+        }
+
         let mut l2_provider =
             AlloyL2ChainProvider::new_http(self.l2_rpc_url()?, Arc::new(Default::default()));
         let l2_chain_id = l2_provider.chain_id().await.map_err(|e| eyre!(e))?;
         let cfg = ROLLUP_CONFIGS
             .get(&l2_chain_id)
-            .cloned()
             .ok_or_else(|| eyre!("No rollup config found for L2 chain ID: {}", l2_chain_id))?;
-        Ok(cfg)
+
+        Ok(cfg.into())
     }
 
     /// Returns the l1 rpc url from CLI or environment variable.
@@ -271,29 +247,48 @@ impl FromOpProgram {
     async fn fault_proof_inputs(&self) -> Result<FaultProofInputs> {
         let cfg = self.rollup_config().await?;
 
-        let mut rollup_provider = self.rollup_provider()?;
+        let rollup_provider = self.rollup_provider()?;
 
-        let next_safe_head = self.find_next_safe_head().await?;
+        let claim_output = rollup_provider.output_at_block(self.l2_block).await?;
+        let parent_output = rollup_provider.output_at_block(self.l2_block - 1).await?;
 
-        let claim_output = rollup_provider
-            .output_at_block(next_safe_head.safe_head.number)
-            .await?;
-        let parent_output = rollup_provider
-            .output_at_block(next_safe_head.safe_head.number - 1)
-            .await?;
+        let chain_definition: ChainDefinition;
+
+        if let Some(genesis_path) = &self.genesis_path {
+            let genesis_file = std::fs::File::open(genesis_path)?;
+            let genesis: faultproof::Genesis = serde_json::from_reader(genesis_file)?;
+            chain_definition = ChainDefinition::Unnamed(cfg.into(), genesis);
+        } else {
+            chain_definition = ChainDefinition::Named(self.chain_name.clone().unwrap());
+        }
+
+        let l1_head: BlockHash;
+
+        if let Some(l1_block) = self.l1_block {
+            l1_head = self
+                .l1_provider()?
+                .block_info_by_number(l1_block)
+                .await
+                .map_err(|_| eyre!("Failed to fetch L1 block info"))?
+                .hash;
+        } else {
+            let next_safe_head = self.find_next_safe_head().await?;
+            l1_head = next_safe_head.l1_block.hash;
+        }
+
         Ok(FaultProofInputs {
-            l1_head: next_safe_head.l1_block.hash,
+            l1_head,
             l2_head: parent_output.block_ref.hash,
             l2_output_root: parent_output.output_root,
-            l2_block_number: next_safe_head.safe_head.number,
+            l2_block_number: claim_output.block_ref.number,
             l2_claim: claim_output.output_root,
-            rollup_config: cfg,
+            chain_definition,
         })
     }
 
     async fn find_next_safe_head(&self) -> Result<SafeHeadResponse> {
         let cfg = self.rollup_config().await?;
-        let mut l2_provider = self.l2_provider(Arc::new(cfg))?;
+        let mut l2_provider = self.l2_provider(Arc::new(cfg.into()))?;
 
         let l2_block_info = l2_provider
             .l2_block_info_by_number(self.l2_block)
@@ -301,13 +296,13 @@ impl FromOpProgram {
             .map_err(|_| eyre!("Failed to fetch L2 block info"))?;
         let mut l1_block_num = l2_block_info.l1_origin.number;
 
-        let mut rollup_provider = self.rollup_provider()?;
+        let rollup_provider = self.rollup_provider()?;
 
         let skip_size = 32;
         for _ in 0..10 {
             l1_block_num += skip_size;
             let next_safe_head = rollup_provider.safe_head_at_block(l1_block_num).await?;
-            if next_safe_head.safe_head.number > self.l2_block {
+            if next_safe_head.safe_head.number >= self.l2_block {
                 return Ok(next_safe_head);
             }
         }

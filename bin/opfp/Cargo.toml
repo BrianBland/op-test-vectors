@@ -23,7 +23,17 @@ tracing-subscriber.workspace = true
 # CLI
 clap.workspace = true
 
+# Foundry
+foundry-common.workspace = true
+anvil.workspace = true
+anvil-core.workspace = true
+cast.workspace = true
+forge-script.workspace = true
+revm.workspace = true
+
 # Alloy
+op-alloy-rpc-types.workspace = true
+alloy-rpc-types.workspace = true
 alloy-primitives.workspace = true
 alloy-consensus.workspace = true
 alloy-eips.workspace = true
@@ -31,5 +41,6 @@ alloy-provider.workspace = true
 
 # OP Types + Kona
 op-test-vectors.workspace = true
+kona-primitives.workspace = true
 kona-derive.workspace = true
 superchain-registry.workspace = true

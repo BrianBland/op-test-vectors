@@ -29,8 +29,8 @@ tracing-subscriber = "0.3.18"
 hashbrown = "0.14.5"
 
 # Alloy Dependencies
-op-alloy-rpc-types = "0.1.4"
-op-alloy-consensus = "0.1.4"
+op-alloy-rpc-types = { git = "https://github.com/alloy-rs/op-alloy", rev = "2b53798e736374ccb4985e513a19c534a60feb5c" }
+op-alloy-consensus = { git = "https://github.com/alloy-rs/op-alloy", rev = "2b53798e736374ccb4985e513a19c534a60feb5c" }
 alloy-primitives = { version = "0.7" }
 alloy-consensus = { version = "0.2" }
 alloy-eips = { version = "0.2" }

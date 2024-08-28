@@ -4087,7 +4087,7 @@ dependencies = [
  "kona-primitives",
  "lru",
  "miniz_oxide",
- "op-alloy-consensus",
+ "op-alloy-consensus 0.1.4",
  "reqwest",
  "revm 13.0.0",
  "serde",
@@ -4109,7 +4109,7 @@ dependencies = [
  "anyhow",
  "c-kzg",
  "hashbrown",
- "op-alloy-consensus",
+ "op-alloy-consensus 0.1.4",
  "revm 13.0.0",
  "serde",
  "sha2",
@@ -4567,16 +4567,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "op-alloy-consensus"
+version = "0.1.5"
+source = "git+https://github.com/alloy-rs/op-alloy?rev=2b53798e736374ccb4985e513a19c534a60feb5c#2b53798e736374ccb4985e513a19c534a60feb5c"
+dependencies = [
+ "alloy-consensus",
+ "alloy-eips",
+ "alloy-primitives",
+ "alloy-rlp",
+ "alloy-serde",
+ "derive_more",
+ "serde",
+]
+
+[[package]]
 name = "op-alloy-rpc-types"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9978c3d449abb03526d378988ae6d51b049ef36205cc97bf284574df9f578021"
+version = "0.1.5"
+source = "git+https://github.com/alloy-rs/op-alloy?rev=2b53798e736374ccb4985e513a19c534a60feb5c#2b53798e736374ccb4985e513a19c534a60feb5c"
 dependencies = [
  "alloy-network",
  "alloy-primitives",
  "alloy-rpc-types-eth",
  "alloy-serde",
- "op-alloy-consensus",
+ "op-alloy-consensus 0.1.5",
  "serde",
  "serde_json",
 ]
@@ -4591,7 +4604,7 @@ dependencies = [
  "color-eyre",
  "hashbrown",
  "kona-primitives",
- "op-alloy-consensus",
+ "op-alloy-consensus 0.1.5",
  "op-alloy-rpc-types",
  "serde",
  "serde_json",
@@ -4673,13 +4686,22 @@ dependencies = [
  "alloy-eips",
  "alloy-primitives",
  "alloy-provider",
+ "alloy-rpc-types",
+ "anvil",
+ "anvil-core",
+ "cast",
  "clap",
  "color-eyre",
+ "forge-script",
+ "foundry-common",
  "futures",
  "hashbrown",
  "kona-derive",
+ "kona-primitives",
+ "op-alloy-rpc-types",
  "op-test-vectors",
  "reqwest",
+ "revm 12.1.0",
  "serde",
  "serde_json",
  "superchain-registry",
@@ -4706,7 +4728,7 @@ dependencies = [
  "futures",
  "http-body-util",
  "hyper 1.4.1",
- "op-alloy-consensus",
+ "op-alloy-consensus 0.1.5",
  "op-alloy-rpc-types",
  "op-test-vectors",
  "reqwest",
