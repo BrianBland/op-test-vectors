@@ -43,13 +43,8 @@ pub struct RunOpProgram {
 impl RunOpProgram {
     /// Runs the `run-op-program` subcommand.
     pub async fn run(&self) -> Result<()> {
-        let fixture = std::fs::read_to_string(&self.fixture)
-            .map_err(|e| eyre!("Failed to read fixture file: {}", e))?;
-        let fixture: FaultProofFixture = serde_json::from_str(&fixture)
-            .map_err(|e| eyre!("Failed to parse fixture file: {}", e))?;
-
         let op_program_command =
-            OpProgramCommand::new(self.op_program.clone(), self.fixture.clone(), fixture);
+            OpProgramCommand::new(self.op_program.clone(), self.fixture.clone());
 
         match self.cannon.as_ref() {
             Some(cannon) => {
@@ -152,6 +147,7 @@ impl CannonCommand {
 pub struct OpProgramCommand {
     /// The path to the op-program binary.
     pub op_program: PathBuf,
+    /// The path to the fixture file.
     pub fixture_path: PathBuf,
     /// The fixture to run the op-program with.
     pub fixture: FaultProofFixture,
@@ -160,7 +156,12 @@ pub struct OpProgramCommand {
 }
 
 impl OpProgramCommand {
-    pub fn new(op_program: PathBuf, fixture_path: PathBuf, fixture: FaultProofFixture) -> Self {
+    pub fn new(op_program: PathBuf, fixture_path: PathBuf) -> Self {
+        let fixture = std::fs::read_to_string(&fixture_path)
+            .map_err(|e| eyre!("Failed to read fixture file: {}", e)).unwrap();
+        let fixture: FaultProofFixture = serde_json::from_str(&fixture)
+            .map_err(|e| eyre!("Failed to parse fixture file: {}", e)).unwrap();
+
         if let ChainDefinition::Unnamed(rollup_config, genesis) = &fixture.inputs.chain_definition {
             let data_dir = env::temp_dir().join("op-program-input");
             if data_dir.exists() {
@@ -176,8 +177,7 @@ impl OpProgramCommand {
             // Write the rollup config to the temp directory.
             let rollup_config_file = data_dir.join("rollup_config.json");
             let file = std::fs::File::create(&rollup_config_file).unwrap();
-            let mut cfg: RollupConfig = rollup_config.into();
-            cfg.channel_timeout_bedrock = 8;
+            let cfg: RollupConfig = rollup_config.into();
             serde_json::to_writer_pretty(file, &cfg).unwrap();
 
             Self {
