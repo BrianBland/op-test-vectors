@@ -107,7 +107,7 @@ impl FromOpProgram {
                 // Write the rollup config to the temp directory.
                 let rollup_config_file = temp_input_dir.join("rollup_config.json");
                 let file = std::fs::File::create(&rollup_config_file)?;
-                let mut cfg: RollupConfig = rollup_config.into();
+                let cfg: RollupConfig = rollup_config.into();
                 serde_json::to_writer_pretty(file, &cfg)?;
 
                 command

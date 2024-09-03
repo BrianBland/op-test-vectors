@@ -1,11 +1,13 @@
 //! Run Op Program Subcommand
 
 use alloy_primitives::hex::ToHexExt;
+use alloy_primitives::U64;
 use clap::{ArgAction, Parser};
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
 use op_test_vectors::faultproof::{ChainDefinition, FaultProofFixture};
-use std::process::{Command, ExitStatus};
+use serde::{Deserialize, Serialize};
+use std::process::Command;
 use std::{env, path::PathBuf};
 use tracing::{debug, error, info, trace, warn};
 
@@ -32,12 +34,33 @@ pub struct RunOpProgram {
     /// Optional cannon metadata
     #[clap(long, help = "Path to the cannon metadata")]
     pub cannon_meta: Option<PathBuf>,
-    /// Optional cannon debug output file path
-    #[clap(long, help = "Path to the cannon debug output file")]
-    pub cannon_debug: Option<PathBuf>,
+    /// Optional output file path
+    #[clap(long, help = "Path to the output file")]
+    pub output: Option<PathBuf>,
     /// Verbosity level (0-4)
     #[arg(long, short, help = "Verbosity level (0-4)", action = ArgAction::Count)]
     pub v: u8,
+}
+
+# [derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProgramStats {
+    pub runtime: u128,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pages: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub memory_used: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_preimage_requests: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_preimage_size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CannonDebug {
+    pub pages: u64,
+    pub memory_used: U64,
+    pub num_preimage_requests: u64,
+    pub total_preimage_size: u64,
 }
 
 impl RunOpProgram {
@@ -52,20 +75,23 @@ impl RunOpProgram {
                     cannon.clone(),
                     self.cannon_state.clone().unwrap(),
                     self.cannon_meta.clone().unwrap(),
-                    self.cannon_debug.clone().unwrap(),
                     op_program_command,
                 );
-                let status = cannon_command.run().await?;
-                if !status.success() {
-                    error!(target: TARGET, "Failed to execute cannon binary");
-                    return Err(eyre!("Failed to execute cannon binary"));
+                let stats = cannon_command.run().await?;
+                info!(target: TARGET, "Cannon stats: {:?}", stats);
+
+                if let Some(output) = &self.output {
+                    let file = std::fs::File::create(output).unwrap();
+                    serde_json::to_writer_pretty(file, &stats).unwrap();
                 }
             }
             None => {
-                let status = op_program_command.run().await?;
-                if !status.success() {
-                    error!(target: TARGET, "Failed to execute op-program binary");
-                    return Err(eyre!("Failed to execute op-program binary"));
+                let stats = op_program_command.run().await?;
+                info!(target: TARGET, "op-program stats: {:?}", stats);
+
+                if let Some(output) = &self.output {
+                    let file = std::fs::File::create(output).unwrap();
+                    serde_json::to_writer_pretty(file, &stats).unwrap();
                 }
             }
         }
@@ -94,9 +120,10 @@ impl CannonCommand {
         cannon: PathBuf,
         state: PathBuf,
         meta: PathBuf,
-        debug: PathBuf,
         op_program: OpProgramCommand,
     ) -> Self {
+        let debug = env::temp_dir().join("cannon-debug.json");
+
         Self {
             cannon,
             state,
@@ -106,14 +133,36 @@ impl CannonCommand {
         }
     }
 
-    pub async fn run(&self) -> Result<ExitStatus> {
+    pub async fn run(&self) -> Result<ProgramStats> {
+        let start = std::time::Instant::now();
+
         let result = Command::new(&self.cannon).args(self.args()).status();
 
-        if let Some(data_dir) = &self.op_program.data_dir {
-            std::fs::remove_dir_all(data_dir).unwrap();
+        if result.is_err() {
+            return Err(eyre!("Failed to execute cannon binary"));
         }
 
-        result.map_err(|e| eyre!(e))
+        let runtime = start.elapsed().as_millis();
+
+        let debug_output = std::fs::read_to_string(&self.debug)
+            .map_err(|e| eyre!("Failed to read debug output file: {}", e)).unwrap();
+        let debug_output: CannonDebug = serde_json::from_str(&debug_output)?;
+
+        let stats = ProgramStats {
+            runtime,
+            pages: Some(debug_output.pages),
+            memory_used: Some(debug_output.memory_used.to()),
+            num_preimage_requests: Some(debug_output.num_preimage_requests),
+            total_preimage_size: Some(debug_output.total_preimage_size),
+        };
+
+        self.cleanup()?;
+
+        Ok(stats)
+    }
+
+    pub fn cleanup(&self) -> Result<()> {
+        self.op_program.cleanup()
     }
 
     pub fn args(&self) -> Vec<String> {
@@ -152,7 +201,7 @@ pub struct OpProgramCommand {
     /// The fixture to run the op-program with.
     pub fixture: FaultProofFixture,
     /// The directory to store the input data for the op-program.
-    pub data_dir: Option<PathBuf>,
+    pub data_dir: PathBuf,
 }
 
 impl OpProgramCommand {
@@ -162,13 +211,13 @@ impl OpProgramCommand {
         let fixture: FaultProofFixture = serde_json::from_str(&fixture)
             .map_err(|e| eyre!("Failed to parse fixture file: {}", e)).unwrap();
 
-        if let ChainDefinition::Unnamed(rollup_config, genesis) = &fixture.inputs.chain_definition {
-            let data_dir = env::temp_dir().join("op-program-input");
-            if data_dir.exists() {
-                std::fs::remove_dir_all(&data_dir).unwrap();
-            }
-            std::fs::create_dir(&data_dir).unwrap();
+        let data_dir = env::temp_dir().join("op-program-input");
+        if data_dir.exists() {
+            std::fs::remove_dir_all(&data_dir).unwrap();
+        }
+        std::fs::create_dir(&data_dir).unwrap();
 
+        if let ChainDefinition::Unnamed(rollup_config, genesis) = &fixture.inputs.chain_definition {
             // Write the genesis file to the temp directory.
             let genesis_file = data_dir.join("genesis.json");
             let file = std::fs::File::create(&genesis_file).unwrap();
@@ -179,31 +228,42 @@ impl OpProgramCommand {
             let file = std::fs::File::create(&rollup_config_file).unwrap();
             let cfg: RollupConfig = rollup_config.into();
             serde_json::to_writer_pretty(file, &cfg).unwrap();
+        }
 
-            Self {
-                op_program,
-                fixture_path,
-                fixture,
-                data_dir: Some(data_dir),
-            }
-        } else {
-            Self {
-                op_program,
-                fixture_path,
-                fixture,
-                data_dir: None,
-            }
+        for (key, value) in &fixture.witness_data {
+            let file = data_dir.join(format!("{}.txt", key.encode_hex_with_prefix()));
+            std::fs::write(file, value.encode_hex()).unwrap();
+        }
+
+        Self {
+            op_program,
+            fixture_path,
+            fixture,
+            data_dir,
         }
     }
 
-    pub async fn run(&self) -> Result<ExitStatus> {
+    pub async fn run(&self) -> Result<ProgramStats> {
+        let start = std::time::Instant::now();
+
         let result = Command::new(&self.op_program).args(self.args()).status();
 
-        if let Some(data_dir) = &self.data_dir {
-            std::fs::remove_dir_all(data_dir).unwrap();
+        if result.is_err() {
+            return Err(eyre!("Failed to execute op-program binary"));
         }
 
-        result.map_err(|e| eyre!(e))
+        let runtime = start.elapsed().as_millis();
+
+        self.cleanup()?;
+
+        Ok(ProgramStats {
+            runtime,
+            ..ProgramStats::default()
+        })
+    }
+
+    pub fn cleanup(&self) -> Result<()> {
+        std::fs::remove_dir_all(&self.data_dir).map_err(|e| eyre!("Failed to remove data dir: {}", e))
     }
 
     pub fn args(&self) -> Vec<String> {
@@ -220,8 +280,8 @@ impl OpProgramCommand {
             self.fixture.inputs.l2_claim.encode_hex_with_prefix(),
             "--log.format".to_string(),
             "terminal".to_string(),
-            "--fixturepath".to_string(),
-            self.fixture_path.to_str().unwrap().to_string(),
+            "--datadir".to_string(),
+            self.data_dir.to_str().unwrap().to_string(),
         ];
         match &self.fixture.inputs.chain_definition {
             ChainDefinition::Named(name) => {
@@ -229,7 +289,7 @@ impl OpProgramCommand {
                 args.push(name.to_string());
             }
             ChainDefinition::Unnamed(_, _) => {
-                let data_dir = self.data_dir.clone().unwrap();
+                let data_dir = self.data_dir.clone();
                 args.push("--l2.genesis".to_string());
                 args.push(data_dir.join("genesis.json").to_str().unwrap().to_string());
                 args.push("--rollup.config".to_string());
