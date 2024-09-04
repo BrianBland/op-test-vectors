@@ -119,9 +119,9 @@ impl FromOpProgram {
 
                 command
                     .arg("--l2.genesis")
-                    .arg(genesis_file.to_str().unwrap())
+                    .arg(genesis_file.to_str().ok_or(eyre!("Failed to convert genesis file path to string"))?)
                     .arg("--rollup.config")
-                    .arg(rollup_config_file.to_str().unwrap());
+                    .arg(rollup_config_file.to_str().ok_or(eyre!("Failed to convert rollup config file path to string"))?);
             }
         }
         // Execute the op-program binary.
@@ -145,7 +145,7 @@ impl FromOpProgram {
             .arg("--log.format")
             .arg("terminal")
             .arg("--datadir")
-            .arg(output_dir.to_str().unwrap())
+            .arg(output_dir.to_str().ok_or(eyre!("Failed to convert output directory path to string"))?)
             .stdout(stdout())
             .stderr(stderr())
             .status()
@@ -159,28 +159,29 @@ impl FromOpProgram {
         let mut witness_data = HashMap::new();
 
         // Parse the output of the op-program binary and populate the witness data.
-        output_dir.read_dir()?.for_each(|entry| {
-            let entry = entry.unwrap();
+        output_dir.read_dir()?.try_for_each(|entry| -> Result<()> {
+            let entry = entry?;
             let path = entry.path();
             debug!(target: TARGET, "Found file: {:?}", path);
 
-            let contents = std::fs::read_to_string(&path).unwrap();
+            let contents = std::fs::read_to_string(&path)?;
             debug!(target: TARGET, "File contents: {}", contents);
 
             // strip the .txt suffix from the file path
             let key = path
                 .file_name()
-                .unwrap()
+                .ok_or(eyre!("Failed to get file name"))?
                 .to_str()
-                .unwrap()
+                .ok_or(eyre!("Failed to convert file name to string"))?
                 .split('.')
                 .next()
-                .unwrap();
+                .ok_or(eyre!("Failed to strip file extension"))?;
 
-            let witness = FromHex::from_hex(contents).unwrap();
+            let witness = FromHex::from_hex(contents)?;
 
-            witness_data.insert(key.parse::<B256>().unwrap(), witness);
-        });
+            witness_data.insert(key.parse::<B256>()?, witness);
+            Ok(())
+        })?;
 
         let fixture = FaultProofFixture {
             inputs,
@@ -268,7 +269,7 @@ impl FromOpProgram {
             let genesis: faultproof::Genesis = serde_json::from_reader(genesis_file)?;
             chain_definition = ChainDefinition::Unnamed(cfg.into(), genesis);
         } else {
-            chain_definition = ChainDefinition::Named(self.chain_name.clone().unwrap());
+            chain_definition = ChainDefinition::Named(self.chain_name.clone().ok_or_else(|| eyre!("Missing chain name"))?);
         }
 
         let l1_head: BlockHash;
