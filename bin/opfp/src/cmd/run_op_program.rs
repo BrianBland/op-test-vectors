@@ -1,7 +1,7 @@
 //! Run Op Program Subcommand
 
 use alloy_primitives::hex::ToHexExt;
-use alloy_primitives::U64;
+use alloy_primitives::{keccak256, U64};
 use clap::{ArgAction, Parser};
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
@@ -131,8 +131,8 @@ impl CannonCommand {
         meta: PathBuf,
         op_program: OpProgramCommand,
     ) -> Self {
-        let output = env::temp_dir().join("cannon-output.json");
-        let debug = env::temp_dir().join("cannon-debug.json");
+        let output = op_program.data_dir.join("cannon-output.json");
+        let debug = op_program.data_dir.join("cannon-debug.json");
 
         Self {
             cannon,
@@ -223,11 +223,12 @@ impl OpProgramCommand {
         let fixture: FaultProofFixture = serde_json::from_str(&fixture)
             .map_err(|e| eyre!("Failed to parse fixture file: {}", e)).unwrap();
 
-        let data_dir = env::temp_dir().join("op-program-input");
+        let hash = keccak256(serde_json::to_string(&fixture).unwrap()).encode_hex();
+        let data_dir = env::temp_dir().join(hash).join("op-program-input");
         if data_dir.exists() {
             std::fs::remove_dir_all(&data_dir).unwrap();
         }
-        std::fs::create_dir(&data_dir).unwrap();
+        std::fs::create_dir_all(&data_dir).unwrap();
 
         if let ChainDefinition::Unnamed(rollup_config, genesis) = &fixture.inputs.chain_definition {
             // Write the genesis file to the temp directory.
