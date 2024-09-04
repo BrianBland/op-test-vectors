@@ -46,6 +46,8 @@ pub struct RunOpProgram {
 pub struct ProgramStats {
     pub runtime: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub pages: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub memory_used: Option<u64>,
@@ -53,6 +55,11 @@ pub struct ProgramStats {
     pub num_preimage_requests: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub total_preimage_size: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CannonOutput {
+    pub step: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -109,6 +116,8 @@ pub struct CannonCommand {
     pub state: PathBuf,
     /// The path to the cannon metadata file.
     pub meta: PathBuf,
+    /// The path to the cannon output file.
+    pub output: PathBuf,
     /// The path to the cannon debug output file.
     pub debug: PathBuf,
     /// The op-program command to run within cannon.
@@ -122,12 +131,14 @@ impl CannonCommand {
         meta: PathBuf,
         op_program: OpProgramCommand,
     ) -> Self {
+        let output = env::temp_dir().join("cannon-output.json");
         let debug = env::temp_dir().join("cannon-debug.json");
 
         Self {
             cannon,
             state,
             meta,
+            output,
             debug,
             op_program,
         }
@@ -144,12 +155,17 @@ impl CannonCommand {
 
         let runtime = start.elapsed().as_millis();
 
+        let output = std::fs::read_to_string(&self.output)
+            .map_err(|e| eyre!("Failed to read output file: {}", e)).unwrap();
+        let output: CannonOutput = serde_json::from_str(&output)?;
+
         let debug_output = std::fs::read_to_string(&self.debug)
             .map_err(|e| eyre!("Failed to read debug output file: {}", e)).unwrap();
         let debug_output: CannonDebug = serde_json::from_str(&debug_output)?;
 
         let stats = ProgramStats {
             runtime,
+            instructions: Some(output.step),
             pages: Some(debug_output.pages),
             memory_used: Some(debug_output.memory_used.to()),
             num_preimage_requests: Some(debug_output.num_preimage_requests),
@@ -170,16 +186,12 @@ impl CannonCommand {
             "run".to_string(),
             "--info-at".to_string(),
             "%10000000".to_string(),
-            "--proof-at".to_string(),
-            "=100000000000".to_string(),
-            "--stop-at".to_string(),
-            "=200000000000".to_string(),
-            "--snapshot-at".to_string(),
-            "%10000000000".to_string(),
             "--input".to_string(),
             self.state.to_str().unwrap().to_string(),
             "--meta".to_string(),
             self.meta.to_str().unwrap().to_string(),
+            "--output".to_string(),
+            self.output.to_str().unwrap().to_string(),
             "--debug-info".to_string(),
             self.debug.to_str().unwrap().to_string(),
             "--".to_string(),
