@@ -1,13 +1,14 @@
 //! Run Op Program Subcommand
 
 use alloy_primitives::hex::ToHexExt;
-use alloy_primitives::{keccak256, U64};
+use alloy_primitives::U64;
 use clap::{ArgAction, Parser};
 use color_eyre::eyre::eyre;
 use color_eyre::Result;
 use op_test_vectors::faultproof::{ChainDefinition, FaultProofFixture};
 use serde::{Deserialize, Serialize};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{env, path::PathBuf};
 use tracing::{debug, error, info, trace, warn};
 
@@ -223,8 +224,8 @@ impl OpProgramCommand {
         let fixture: FaultProofFixture = serde_json::from_str(&fixture)
             .map_err(|e| eyre!("Failed to parse fixture file: {}", e)).unwrap();
 
-        let hash = keccak256(serde_json::to_string(&fixture).unwrap()).encode_hex();
-        let data_dir = env::temp_dir().join(hash).join("op-program-input");
+        let dirname = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis().to_string();
+        let data_dir = env::temp_dir().join("run-op-program").join(dirname);
         if data_dir.exists() {
             std::fs::remove_dir_all(&data_dir).unwrap();
         }

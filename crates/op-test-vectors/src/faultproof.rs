@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use alloy_primitives::{Address, BlockHash, BlockNumber, Bytes, ChainId, B256, U256, U64};
+use alloy_primitives::{Address, BlockHash, BlockNumber, Bytes, ChainId, B256, U256};
 use hashbrown::HashMap;
 use kona_primitives::RollupConfig;
 use serde::{Deserialize, Serialize};

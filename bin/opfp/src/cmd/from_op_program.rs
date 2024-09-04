@@ -10,6 +10,7 @@ use kona_derive::online::*;
 use op_test_vectors::faultproof::{self, ChainDefinition, FaultProofFixture, FaultProofInputs};
 use reqwest::Url;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{
     env,
     io::{stderr, stdout},
@@ -77,21 +78,24 @@ impl FromOpProgram {
         let inputs = self.fault_proof_inputs().await?;
         debug!(target: TARGET, "Using the following fault proof inputs: {:?}", inputs);
 
-        let temp_input_dir = env::temp_dir().join("op-program-input");
-        if temp_input_dir.exists() {
-            std::fs::remove_dir_all(&temp_input_dir).unwrap();
-            std::fs::create_dir(&temp_input_dir)?;
-        } else {
-            std::fs::create_dir(&temp_input_dir)?;
-        }
-        info!(target: TARGET, "Created input temp directory: {:?}", temp_input_dir);
+        let dirname = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis().to_string();
+        let data_dir = env::temp_dir().join("from-op-program").join(dirname);
+        std::fs::create_dir_all(&data_dir)?;
 
-        // create a random temp directory to store the output of the op-program binary.
-        let temp_dir = env::temp_dir().join("op-program-output");
-        if temp_dir.exists() {
-            std::fs::remove_dir_all(&temp_dir).unwrap();
+        let input_dir = data_dir.join("input");
+        if input_dir.exists() {
+            std::fs::remove_dir_all(&input_dir)?;
+            std::fs::create_dir(&input_dir)?;
+        } else {
+            std::fs::create_dir(&input_dir)?;
         }
-        info!(target: TARGET, "Created output temp directory: {:?}", temp_dir);
+        info!(target: TARGET, "Created input temp directory: {:?}", input_dir);
+
+        let output_dir = data_dir.join("output");
+        if output_dir.exists() {
+            std::fs::remove_dir_all(&output_dir)?;
+        }
+        info!(target: TARGET, "Created output temp directory: {:?}", output_dir);
 
         let mut command = std::process::Command::new(&self.op_program);
         match &inputs.chain_definition {
@@ -100,12 +104,12 @@ impl FromOpProgram {
             }
             ChainDefinition::Unnamed(rollup_config, genesis) => {
                 // Copy the genesis file to the temp directory.
-                let genesis_file = temp_input_dir.join("genesis.json");
+                let genesis_file = input_dir.join("genesis.json");
                 let file = std::fs::File::create(&genesis_file)?;
                 serde_json::to_writer_pretty(file, &genesis)?;
 
                 // Write the rollup config to the temp directory.
-                let rollup_config_file = temp_input_dir.join("rollup_config.json");
+                let rollup_config_file = input_dir.join("rollup_config.json");
                 let file = std::fs::File::create(&rollup_config_file)?;
                 let cfg: RollupConfig = rollup_config.into();
                 serde_json::to_writer_pretty(file, &cfg)?;
@@ -138,7 +142,7 @@ impl FromOpProgram {
             .arg("--log.format")
             .arg("terminal")
             .arg("--datadir")
-            .arg(temp_dir.to_str().unwrap())
+            .arg(output_dir.to_str().unwrap())
             .stdout(stdout())
             .stderr(stderr())
             .status()
@@ -152,7 +156,7 @@ impl FromOpProgram {
         let mut witness_data = HashMap::new();
 
         // Parse the output of the op-program binary and populate the witness data.
-        temp_dir.read_dir()?.for_each(|entry| {
+        output_dir.read_dir()?.for_each(|entry| {
             let entry = entry.unwrap();
             let path = entry.path();
             debug!(target: TARGET, "Found file: {:?}", path);
