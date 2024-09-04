@@ -43,7 +43,7 @@ pub struct RunOpProgram {
     pub v: u8,
 }
 
-# [derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ProgramStats {
     pub runtime: u128,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,35 +74,58 @@ struct CannonDebug {
 impl RunOpProgram {
     /// Runs the `run-op-program` subcommand.
     pub async fn run(&self) -> Result<()> {
+        let fixture = std::fs::read_to_string(&self.fixture)
+            .map_err(|e| eyre!("Failed to read fixture file: {}", e))?;
+        let fixture: FaultProofFixture = serde_json::from_str(&fixture)
+            .map_err(|e| eyre!("Failed to parse fixture file: {}", e))?;
+
+        let dirname = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_millis()
+            .to_string();
+        let data_dir = env::temp_dir().join("run-op-program").join(dirname);
+        if data_dir.exists() {
+            std::fs::remove_dir_all(&data_dir)?;
+        }
+        std::fs::create_dir_all(&data_dir)?;
+
         let op_program_command =
-            OpProgramCommand::new(self.op_program.clone(), self.fixture.clone());
+            OpProgramCommand::new(self.op_program.clone(), fixture, data_dir.clone());
 
         match self.cannon.as_ref() {
             Some(cannon) => {
                 let cannon_command = CannonCommand::new(
                     cannon.clone(),
-                    self.cannon_state.clone().unwrap(),
-                    self.cannon_meta.clone().unwrap(),
+                    self.cannon_state
+                        .clone()
+                        .ok_or(eyre!("Missing cannon state"))?,
+                    self.cannon_meta
+                        .clone()
+                        .ok_or(eyre!("Missing cannon meta"))?,
                     op_program_command,
                 );
+                cannon_command.prepare().await?;
                 let stats = cannon_command.run().await?;
                 info!(target: TARGET, "Cannon stats: {:?}", stats);
 
                 if let Some(output) = &self.output {
-                    let file = std::fs::File::create(output).unwrap();
-                    serde_json::to_writer_pretty(file, &stats).unwrap();
+                    let file = std::fs::File::create(output)?;
+                    serde_json::to_writer_pretty(file, &stats)?;
                 }
             }
             None => {
+                op_program_command.prepare().await?;
                 let stats = op_program_command.run().await?;
                 info!(target: TARGET, "op-program stats: {:?}", stats);
 
                 if let Some(output) = &self.output {
-                    let file = std::fs::File::create(output).unwrap();
-                    serde_json::to_writer_pretty(file, &stats).unwrap();
+                    let file = std::fs::File::create(output)?;
+                    serde_json::to_writer_pretty(file, &stats)?;
                 }
             }
         }
+
+        std::fs::remove_dir_all(&data_dir)?;
 
         Ok(())
     }
@@ -145,6 +168,12 @@ impl CannonCommand {
         }
     }
 
+    pub async fn prepare(&self) -> Result<()> {
+        self.op_program.prepare().await?;
+
+        Ok(())
+    }
+
     pub async fn run(&self) -> Result<ProgramStats> {
         let start = std::time::Instant::now();
 
@@ -157,11 +186,11 @@ impl CannonCommand {
         let runtime = start.elapsed().as_millis();
 
         let output = std::fs::read_to_string(&self.output)
-            .map_err(|e| eyre!("Failed to read output file: {}", e)).unwrap();
+            .map_err(|e| eyre!("Failed to read output file: {}", e))?;
         let output: CannonOutput = serde_json::from_str(&output)?;
 
         let debug_output = std::fs::read_to_string(&self.debug)
-            .map_err(|e| eyre!("Failed to read debug output file: {}", e)).unwrap();
+            .map_err(|e| eyre!("Failed to read debug output file: {}", e))?;
         let debug_output: CannonDebug = serde_json::from_str(&debug_output)?;
 
         let stats = ProgramStats {
@@ -173,13 +202,7 @@ impl CannonCommand {
             total_preimage_size: Some(debug_output.total_preimage_size),
         };
 
-        self.cleanup()?;
-
         Ok(stats)
-    }
-
-    pub fn cleanup(&self) -> Result<()> {
-        self.op_program.cleanup()
     }
 
     pub fn args(&self) -> Vec<String> {
@@ -209,8 +232,6 @@ impl CannonCommand {
 pub struct OpProgramCommand {
     /// The path to the op-program binary.
     pub op_program: PathBuf,
-    /// The path to the fixture file.
-    pub fixture_path: PathBuf,
     /// The fixture to run the op-program with.
     pub fixture: FaultProofFixture,
     /// The directory to store the input data for the op-program.
@@ -218,43 +239,38 @@ pub struct OpProgramCommand {
 }
 
 impl OpProgramCommand {
-    pub fn new(op_program: PathBuf, fixture_path: PathBuf) -> Self {
-        let fixture = std::fs::read_to_string(&fixture_path)
-            .map_err(|e| eyre!("Failed to read fixture file: {}", e)).unwrap();
-        let fixture: FaultProofFixture = serde_json::from_str(&fixture)
-            .map_err(|e| eyre!("Failed to parse fixture file: {}", e)).unwrap();
-
-        let dirname = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis().to_string();
-        let data_dir = env::temp_dir().join("run-op-program").join(dirname);
-        if data_dir.exists() {
-            std::fs::remove_dir_all(&data_dir).unwrap();
-        }
-        std::fs::create_dir_all(&data_dir).unwrap();
-
-        if let ChainDefinition::Unnamed(rollup_config, genesis) = &fixture.inputs.chain_definition {
-            // Write the genesis file to the temp directory.
-            let genesis_file = data_dir.join("genesis.json");
-            let file = std::fs::File::create(&genesis_file).unwrap();
-            serde_json::to_writer_pretty(file, &genesis).unwrap();
-
-            // Write the rollup config to the temp directory.
-            let rollup_config_file = data_dir.join("rollup_config.json");
-            let file = std::fs::File::create(&rollup_config_file).unwrap();
-            let cfg: RollupConfig = rollup_config.into();
-            serde_json::to_writer_pretty(file, &cfg).unwrap();
-        }
-
-        for (key, value) in &fixture.witness_data {
-            let file = data_dir.join(format!("{}.txt", key.encode_hex_with_prefix()));
-            std::fs::write(file, value.encode_hex()).unwrap();
-        }
-
+    pub fn new(op_program: PathBuf, fixture: FaultProofFixture, data_dir: PathBuf) -> Self {
         Self {
             op_program,
-            fixture_path,
             fixture,
             data_dir,
         }
+    }
+
+    pub async fn prepare(&self) -> Result<()> {
+        if let ChainDefinition::Unnamed(rollup_config, genesis) =
+            &self.fixture.inputs.chain_definition
+        {
+            // Write the genesis file to the temp directory.
+            let genesis_file = self.data_dir.join("genesis.json");
+            let file = std::fs::File::create(&genesis_file)?;
+            serde_json::to_writer_pretty(file, &genesis)?;
+
+            // Write the rollup config to the temp directory.
+            let rollup_config_file = self.data_dir.join("rollup_config.json");
+            let file = std::fs::File::create(&rollup_config_file)?;
+            let cfg: RollupConfig = rollup_config.into();
+            serde_json::to_writer_pretty(file, &cfg)?;
+        }
+
+        for (key, value) in &self.fixture.witness_data {
+            let file = self
+                .data_dir
+                .join(format!("{}.txt", key.encode_hex_with_prefix()));
+            std::fs::write(file, value.encode_hex())?;
+        }
+
+        Ok(())
     }
 
     pub async fn run(&self) -> Result<ProgramStats> {
@@ -268,16 +284,10 @@ impl OpProgramCommand {
 
         let runtime = start.elapsed().as_millis();
 
-        self.cleanup()?;
-
         Ok(ProgramStats {
             runtime,
             ..ProgramStats::default()
         })
-    }
-
-    pub fn cleanup(&self) -> Result<()> {
-        std::fs::remove_dir_all(&self.data_dir).map_err(|e| eyre!("Failed to remove data dir: {}", e))
     }
 
     pub fn args(&self) -> Vec<String> {

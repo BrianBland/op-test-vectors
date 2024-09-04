@@ -78,7 +78,10 @@ impl FromOpProgram {
         let inputs = self.fault_proof_inputs().await?;
         debug!(target: TARGET, "Using the following fault proof inputs: {:?}", inputs);
 
-        let dirname = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis().to_string();
+        let dirname = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_millis()
+            .to_string();
         let data_dir = env::temp_dir().join("from-op-program").join(dirname);
         std::fs::create_dir_all(&data_dir)?;
 
